@@ -5,7 +5,7 @@ on:
     inputs:
       restream_key:
         required: false
-        default: 're_12543719_eventca388e3ddc2945abbf124f081e81fe78'
+        default: 're_12394408_event6b84ba417d8c4f5a87daa60a938253b0'
   repository_dispatch:
     types: [chain-trigger]
 
