@@ -2,265 +2,210 @@
 set +m
 
 # ═══════════════════════════════════════════════════
-#  Respect Broadcast — Smart Priority + Infinite Chain
+#  SXB Broadcast — Infinite Handoff (3s Gap)
 # ═══════════════════════════════════════════════════
 
-STREAMERS_LIST="${STREAMERS_LIST:-Peerless,drb7h,S5B,ABO8ALYY,ID7O,F1AISAL,xmusabrt,TAF86,abo_khrbaa,Seagull,iMonkey_D,FHLWY,Hook,okb8,wolf,NASSER,Aymnalsatam,BoQamar,NEFOXD,RAYN,xya7ya,W1pey,AL_Hashidi,moustache,ALRND,klash,OGxHusni,Sayko_911,ZAiKRx}"
-LOGO_URL="https://i.top4top.io/p_39264fv5g0.png"
+STREAMER="DRB7H"
+TITLE_AR="انتضار بث دربحه "
+SUBTITLE_AR="بث ريسبكت!"
+LOGO_URL="https://h.top4top.io/p_3966xt60d0.png"
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-RESTREAM_KEY="${RESTREAM_KEY:-}"
+RESTREAM_KEY="${RESTREAM_KEY:-re_12688978_event4bf619a154df42af8e26e9da0d357d80}"
 [ -z "$RESTREAM_KEY" ] && { echo "❌ مفتاح Restream فارغ"; exit 1; }
 
 RESTREAM_URL="rtmp://live.restream.io/live/$RESTREAM_KEY"
-FIFO="/tmp/relay.ts"
-WORKDIR="/tmp/respect_ui"
-
-# إعدادات التوقيت للسلسلة اللانهائية
-MAX_STREAM_SEC=19800      # 330 دقيقة = 5.5 ساعات (وقت الخروج)
-TRIGGER_AT_SEC=18000      # 300 دقيقة = 5 ساعات (وقت إطلاق الرن التالي)
-START_TS=$(date +%s)
-
-IFS=',' read -r -a STREAMERS <<< "$STREAMERS_LIST"
+WORKDIR="/tmp/standby_sxb"
 mkdir -p "$WORKDIR"
 
-# ═══════════════════════════════════════════════════
-#  1. نظام المراقبة (Watchdog) 
-# ═══════════════════════════════════════════════════
-API_BASE="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/main.yml/runs"
-
-get_active_runs() {
-    curl -s -H "Authorization: token ${GITHUB_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "${API_BASE}?per_page=30" | \
-    jq -r --arg self "$GITHUB_RUN_ID" \
-      '.workflow_runs[]? | select(.id != ($self|tonumber)) | select(.status == "in_progress" or .status == "queued" or .status == "waiting") | "\(.id):\(.event):\(.status)"' \
-      2>/dev/null || true
-}
-
-count_chain() {
-    echo "$1" | grep ":repository_dispatch:" | wc -l | tr -d ' '
-}
-
-if [ "${TRIGGER_TYPE}" != "repository_dispatch" ]; then
-    INITIAL=$(get_active_runs)
-    if [ "$(count_chain "$INITIAL")" -gt 0 ]; then
-        echo "[$(date)] هناك سلسلة نشطة بالفعل. سيتم الإلغاء لتجنب التكرار."
-        exit 0
-    fi
-fi
-
-echo "[$(date)] جاري فحص الرنات السابقة..."
-while true; do
-    ACTIVE=$(get_active_runs)
-    if [ -z "$ACTIVE" ]; then
-        echo "[$(date)] لا يوجد رن نشط. بدء البث الآن."
-        break
-    fi
-    sleep 3
-done
-
-# ═══════════════════════════════════════════════════
-#  2. إعداد شاشة الانتظار والأنبوب
-# ═══════════════════════════════════════════════════
+# 1. توليد شاشة الانتظار
 if [ ! -f "$WORKDIR/standby.ts" ]; then
-    echo "🎨 تجهيز شاشة الانتظار..."
+    echo "🎨 تصميم شاشة الانتظار..."
     cat > /tmp/make_ui.py <<'PYEOF'
-from PIL import Image, ImageDraw, ImageFont
-import os
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+import urllib.request, io, os
+
 W, H = 1920, 1080
 WORKDIR = os.environ["WORKDIR"]
-STREAMERS = [s.strip() for s in os.environ.get("STREAMERS_LIST", "").split(',') if s.strip()]
-bg = Image.new("RGB", (W, H), (10, 2, 20))
+FONT_AR = os.path.expanduser("~/.fonts/Cairo-var.ttf")
+FONT_EN = os.path.expanduser("~/.fonts/Orbitron-var.ttf")
+TITLE = os.environ.get("TITLE_AR", "توقف البث")
+SUBTITLE = os.environ.get("SUBTITLE_AR", "جاري الانتظار...")
+STREAMER = os.environ.get("STREAMER", "S5B")
+LOGO_URL = os.environ.get("LOGO_URL", "https://h.top4top.io/p_3966xt60d0.png")
+
+def load_font(path, size, weight=700):
+    try:
+        font = ImageFont.truetype(path, size)
+        axes = font.get_variation_axes()
+        if len(axes) == 1: font.set_variation_by_axes([weight])
+        elif len(axes) == 2: font.set_variation_by_axes([0, weight])
+        return font
+    except: return ImageFont.load_default()
+
+bg = Image.new("RGB", (W, H))
 d = ImageDraw.Draw(bg)
+for y in range(H):
+    t = y / H
+    d.line([(0, y), (W, y)], fill=(int(30*(1-t)), int(0), int(0)))
+
+glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+gd = ImageDraw.Draw(glow)
+gd.ellipse([W//2 - 600, H//2 - 400, W//2 + 600, H//2 + 400], fill=(255, 0, 0, 80))
+glow = glow.filter(ImageFilter.GaussianBlur(250))
+bg = bg.convert("RGBA")
+bg = Image.alpha_composite(bg, glow)
+
+corner = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+cd = ImageDraw.Draw(corner)
+SIZE = 80
+def draw_corner(cx, cy, fx, fy):
+    cd.line([(cx, cy), (cx + SIZE*fx, cy)], fill=(255, 0, 0, 255), width=4)
+    cd.line([(cx, cy), (cx, cy + SIZE*fy)], fill=(255, 0, 0, 255), width=4)
+draw_corner(40, 40, 1, 1); draw_corner(W-40, 40, -1, 1)
+draw_corner(40, H-40, 1, -1); draw_corner(W-40, H-40, -1, -1)
+bg = Image.alpha_composite(bg, corner)
+
+card_w, card_h = 1200, 600
+card_x, card_y = (W - card_w)//2, (H - card_h)//2
+card = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+cd = ImageDraw.Draw(card)
+cd.rounded_rectangle([(card_x, card_y), (card_x+card_w, card_y+card_h)], radius=20, fill=(20, 0, 0, 150), outline=(255, 0, 0, 100), width=2)
+cd.rounded_rectangle([(card_x+5, card_y+5), (card_x+card_w-5, card_y+card_h-5)], radius=18, outline=(255, 255, 255, 30), width=1)
+bg = Image.alpha_composite(bg, card)
+
+font_title = load_font(FONT_AR, 100, 900)
+font_sub = load_font(FONT_AR, 50, 700)
+font_sxb = load_font(FONT_EN, 150, 900)
+
+t_img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+ImageDraw.Draw(t_img).text((W//2, card_y + 100), TITLE, font=font_title, fill=(255, 255, 255, 255), anchor="mm", direction="rtl")
+bg = Image.alpha_composite(bg, t_img.filter(ImageFilter.GaussianBlur(20)))
+bg = Image.alpha_composite(bg, t_img)
+
+s_img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+ImageDraw.Draw(s_img).text((W//2, card_y + 220), SUBTITLE, font=font_sub, fill=(255, 255, 255, 200), anchor="mm", direction="rtl")
+bg = Image.alpha_composite(bg, s_img)
+
+sxb_img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+ImageDraw.Draw(sxb_img).text((W//2, card_y + 400), STREAMER, font=font_sxb, fill=(255, 0, 0, 255), anchor="mm")
+bg = Image.alpha_composite(bg, sxb_img.filter(ImageFilter.GaussianBlur(40)))
+bg = Image.alpha_composite(bg, sxb_img)
+
 try:
-    font = ImageFont.truetype(os.path.expanduser("~/.fonts/Orbitron-var.ttf"), 100)
-    font_sub = ImageFont.truetype(os.path.expanduser("~/.fonts/Cairo-var.ttf"), 40)
-    font_list = ImageFont.truetype(os.path.expanduser("~/.fonts/Orbitron-var.ttf"), 24)
-    
-    d.text((W//2, 200), "RESPECT", font=font, fill=(212, 179, 255), anchor="mm")
-    d.text((W//2, 300), "جاري انتظار انضمام الستريمرز...", font=font_sub, fill=(255, 255, 255), anchor="mm")
-    
-    COLS = 5
-    for i, item in enumerate(STREAMERS):
-        row, col = i // COLS, i % COLS
-        x, y = 250 + col * 300, 450 + row * 60
-        d.text((x, y), item.upper(), font=font_list, fill=(255, 255, 255), anchor="lm")
-except Exception as e: print(e)
-bg.save(f"{WORKDIR}/bg.png")
+    req = urllib.request.Request(LOGO_URL, headers={"User-Agent": "Mozilla/5.0"})
+    logo = Image.open(io.BytesIO(urllib.request.urlopen(req, timeout=10).read())).convert("RGBA")
+    logo = logo.resize((150, int(logo.height * (150 / logo.width))), Image.LANCZOS)
+    bg.alpha_composite(logo, ((W - 150)//2, card_y - 90))
+except Exception: pass
+
+bg.convert("RGB").save(f"{WORKDIR}/bg.png")
 PYEOF
-    WORKDIR="$WORKDIR" STREAMERS_LIST="$STREAMERS_LIST" python3 /tmp/make_ui.py
-    ffmpeg -y -hide_banner -loglevel warning -loop 1 -framerate 30 -i "$WORKDIR/bg.png" -f lavfi -i "anullsrc=r=48000:cl=stereo" -t 4 -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 30 -c:a aac -ar 48000 -ac 2 -shortest -f mpegts "$WORKDIR/standby.ts"
+    WORKDIR="$WORKDIR" STREAMER="$STREAMER" TITLE_AR="$TITLE_AR" SUBTITLE_AR="$SUBTITLE_AR" LOGO_URL="$LOGO_URL" python3 /tmp/make_ui.py
+    ffmpeg -y -hide_banner -loglevel warning -loop 1 -framerate 60 -i "$WORKDIR/bg.png" \
+        -f lavfi -i "anullsrc=r=44100:cl=stereo" -t 4 \
+        -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 120 -r 60 \
+        -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest \
+        -f mpegts "$WORKDIR/standby.ts"
 fi
 
-rm -f "$FIFO"
-mkfifo "$FIFO"
-exec 3<>"$FIFO"
-
-cleanup() {
-    echo "[$(date)] تنظيف وإغلاق..."
-    kill -TERM "$OUT" 2>/dev/null
-    kill -TERM -- -"$PROD" 2>/dev/null
-    pkill -f streamlink 2>/dev/null
-    exit 0
-}
-trap cleanup SIGTERM SIGINT
-
 # ═══════════════════════════════════════════════════
-#  3. دوال الإخراج والبث (تم إصلاح الصوت هنا)
+#  منطق التسليم والتسلّم (Handoff)
 # ═══════════════════════════════════════════════════
-start_output() {
-    ffmpeg -y -hide_banner -loglevel warning -nostdin -thread_queue_size 1024 \
-        -fflags +genpts+igndts+discardcorrupt -err_detect ignore_err \
-        -f mpegts -i "$FIFO" -map 0:v:0 -map 0:a:0? -c:v copy \
-        -c:a aac -b:a 192k -ar 48000 -ac 2 -af "aresample=async=1" \
-        -max_muxing_queue_size 4096 -flvflags no_duration_filesize -rtmp_live live \
-        -f flv "$RESTREAM_URL" >/tmp/out.log 2>&1 &
-    OUT=$!
-    sleep 3
-}
+echo "🔍 البحث عن رنات قديمة شغالة..."
+OLD_RUNS=$(gh run list --workflow="main.yml" --status=in_progress --json databaseId --jq '.[].databaseId' 2>/dev/null | awk -v m="$GITHUB_RUN_ID" '$1 != m')
 
-start_producer_standby() {
-    setsid ffmpeg -y -hide_banner -loglevel warning -nostdin -re -stream_loop -1 -i "$WORKDIR/standby.ts" \
-        -c copy -f mpegts "$FIFO" >/tmp/prod.log 2>&1 &
-    PROD=$!
-}
-
-start_producer_live() {
-    setsid bash -c "streamlink --http-header 'User-Agent=$UA' 'https://kick.com/$1' best --stdout 2>/dev/null | \
-        ffmpeg -y -hide_banner -loglevel warning -nostdin -thread_queue_size 1024 -fflags +genpts+igndts+discardcorrupt -err_detect ignore_err \
-        -i pipe:0 -c copy -f mpegts '$FIFO' >/tmp/prod.log 2>&1" &
-    PROD=$!
-}
-
-kill_producer() {
-    if [ -n "$PROD" ]; then 
-        kill -TERM -- -"$PROD" 2>/dev/null
-        sleep 0.1 
-        kill -9 -- -"$PROD" 2>/dev/null
-    fi
-    PROD=""
-}
-
-trigger_next() {
-    echo "[$(date)] جاري إطلاق الرن التالي في الخلفية..."
-    for attempt in $(seq 1 10); do
-        CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST \
-            -H "Authorization: token ${GITHUB_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/dispatches" \
-            -d "{\"event_type\":\"chain-trigger\",\"client_payload\":{\"parent_run\":\"${GITHUB_RUN_ID}\",\"restream_key\":\"${RESTREAM_KEY}\"}}")
-        if [ "$CODE" = "204" ]; then
-            echo "[$(date)] تم إطلاق الرن التالي بنجاح."
-            return 0
-        fi
-        echo "[$(date)] فشل الإطلاق (HTTP=$CODE). محاولة $attempt..."
-        sleep 10
+if [ -n "$OLD_RUNS" ]; then
+    echo "⚠️ يوجد رن قديم نشط: $OLD_RUNS"
+    for R in $OLD_RUNS; do
+        timeout 10 gh run cancel "$R" 2>/dev/null || true
     done
-    return 1
+    echo "⏳ انتظار 3 ثوانٍ لتحرير اتصال Restream..."
+    sleep 3
+else
+    echo "✅ لا يوجد رن قديم. بدء البث مباشرة."
+fi
+
+# ═══════════════════════════════════════════════════
+#  دوال البث
+# ═══════════════════════════════════════════════════
+stream_live() {
+    echo "🔴 بث مباشر: $STREAMER (1080p60 Zero-CPU)"
+    streamlink --http-header "User-Agent=$UA" "https://kick.com/$STREAMER" best --stdout 2>/dev/null | \
+    ffmpeg -hide_banner -loglevel warning -nostdin \
+        -thread_queue_size 512 \
+        -fflags +genpts+discardcorrupt \
+        -err_detect ignore_err \
+        -i pipe:0 \
+        -c:v copy \
+        -af "volume=1.1,alimiter=limit=0.95" \
+        -c:a aac -b:a 160k -ar 44100 -ac 2 \
+        -max_muxing_queue_size 4096 -flvflags no_duration_filesize \
+        -f flv "$RESTREAM_URL"
+}
+
+stream_standby() {
+    local REMAINING=$1
+    echo "⏳ إرسال شاشة الانتظار (الوقت المتبقي: $REMAINING ثانية)..."
+    
+    # استخدام -stream_loop -1 لضمان عدم انهيار ffmpeg
+    # استخدام eif لرسم العداد التنازلي ديناميكياً
+    ffmpeg -hide_banner -loglevel warning -nostdin \
+        -re -stream_loop -1 -i "$WORKDIR/standby.ts" \
+        -vf "drawtext=fontfile=$HOME/.fonts/Orbitron-var.ttf:text='%{eif\:floor(${REMAINING}-t)/60\:d\:2}\:%{eif\:mod(${REMAINING}-t\,60)\:d\:2}':x=w-tw-100:y=100:fontsize=70:fontcolor=red:box=1:boxcolor=black@0.5" \
+        -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 60 -r 30 -threads 1 \
+        -c:a aac -b:a 128k -ar 44100 -ac 2 \
+        -t "$REMAINING" -f flv "$RESTREAM_URL" >/tmp/standby.log 2>&1 &
+    
+    STANDBY_PID=$!
+    echo "⏳ Standby PID: $STANDBY_PID"
 }
 
 # ═══════════════════════════════════════════════════
-#  4. التشغيل الرئيسي
+#  الحلقة الرئيسية
 # ═══════════════════════════════════════════════════
-echo "🚀 بدء التشغيل..."
-start_producer_standby
-sleep 2
-start_output
+echo "🚀 بدء المراقبة..."
 
-MODE="STANDBY"
-ACTIVE=""
-ACTIVE_IDX="-1"
-TRIGGER_ATTEMPTED=0
-TRIGGER_PID=""
+OFFLINE_START=0
+MAX_OFFLINE=600
+STANDBY_PID=""
 
 while true; do
-    NOW=$(date +%s)
-    ELAPSED=$((NOW - START_TS))
+    URL=$(timeout 10 streamlink --http-header "User-Agent=$UA" "https://kick.com/$STREAMER" best --stream-url 2>/dev/null | grep -m1 "^http")
 
-    # الخروج عند الوصول للحد الأقصى (5.5 ساعات)
-    if [ "$ELAPSED" -ge "$MAX_STREAM_SEC" ]; then
-        echo "[$(date)] وصلنا للحد الأقصى (5.5 ساعات). تسليم المهمة للرن التالي."
-        break
-    fi
-
-    # إطلاق الرن التالي عند الدقيقة 300 (5 ساعات)
-    if [ "$TRIGGER_ATTEMPTED" -eq 0 ] && [ "$ELAPSED" -ge "$TRIGGER_AT_SEC" ]; then
-        TRIGGER_ATTEMPTED=1
-        trigger_next &
-        TRIGGER_PID=$!
-    fi
-
-    if ! kill -0 "$OUT" 2>/dev/null; then
-        start_output
-    fi
-
-    if ! kill -0 "$PROD" 2>/dev/null; then
-        start_producer_standby
-        MODE="STANDBY"; ACTIVE=""; ACTIVE_IDX="-1"
-    fi
-
-    if [ "$MODE" = "STANDBY" ]; then
-        FOUND=""
-        FOUND_IDX="-1"
-        for ((i=0; i<${#STREAMERS[@]}; i++)); do
-            S=$(echo "${STREAMERS[$i]}" | xargs); [ -z "$S" ] && continue
-            URL=$(timeout 3 streamlink --http-header "User-Agent=$UA" "https://kick.com/$S" best --stream-url 2>/dev/null | grep -m1 "^http")
-            if [ -n "$URL" ]; then FOUND="$S"; FOUND_IDX=$i; break; fi
-        done
-
-        if [ -n "$FOUND" ]; then
-            echo "🎯 وجدنا: $FOUND (تبديل...)"
-            kill_producer; sleep 0.1
-            start_producer_live "$FOUND"
-            sleep 2
-            if kill -0 "$PROD" 2>/dev/null; then 
-                MODE="LIVE"; ACTIVE="$FOUND"; ACTIVE_IDX="$FOUND_IDX"; echo "✅ مباشر: $FOUND"
-            else 
-                start_producer_standby; MODE="STANDBY"; ACTIVE=""; ACTIVE_IDX="-1"
-            fi
+    if [ -n "$URL" ]; then
+        # إذا كان يبث، نطفي شاشة الانتظار ونصفّر العداد
+        if [ -n "$STANDBY_PID" ] && kill -0 "$STANDBY_PID" 2>/dev/null; then
+            kill "$STANDBY_PID" 2>/dev/null
+            wait "$STANDBY_PID" 2>/dev/null
+            STANDBY_PID=""
         fi
-    fi
-
-    if [ "$MODE" = "LIVE" ] && [ -n "$ACTIVE" ]; then
-        URL=$(timeout 3 streamlink --http-header "User-Agent=$UA" "https://kick.com/$ACTIVE" best --stream-url 2>/dev/null | grep -m1 "^http")
-        if [ -z "$URL" ]; then
-            echo "⏳ توقف $ACTIVE — تحويل للانتظار..."
-            kill_producer; sleep 0.1
-            start_producer_standby
-            MODE="STANDBY"; ACTIVE=""; ACTIVE_IDX="-1"
-        else
-            if [ "$ACTIVE_IDX" -gt 0 ]; then
-                for ((i=0; i<ACTIVE_IDX; i++)); do
-                    S=$(echo "${STREAMERS[$i]}" | xargs)
-                    CHECK_URL=$(timeout 2 streamlink --http-header "User-Agent=$UA" "https://kick.com/$S" best --stream-url 2>/dev/null | grep -m1 "^http")
-                    if [ -n "$CHECK_URL" ]; then
-                        echo "🚀 ستريمر أعلى أولوية بدأ البث: $S (تحويل فوري...)"
-                        kill_producer; sleep 0.1
-                        start_producer_live "$S"
-                        sleep 2
-                        if kill -0 "$PROD" 2>/dev/null; then 
-                            MODE="LIVE"; ACTIVE="$S"; ACTIVE_IDX=$i
-                        else 
-                            start_producer_standby; MODE="STANDBY"; ACTIVE=""; ACTIVE_IDX="-1"
-                        fi
-                        break
-                    fi
-                done
-            fi
+        
+        OFFLINE_START=0
+        stream_live
+        echo "⚠️ انقطع البث. إعادة الفحص بعد 5 ثواني..."
+        sleep 5
+    else
+        # إذا كان طافي، نحسب الوقت
+        if [ "$OFFLINE_START" -eq 0 ]; then
+            OFFLINE_START=$(date +%s)
         fi
+        
+        NOW=$(date +%s)
+        ELAPSED=$((NOW - OFFLINE_START))
+        REMAINING=$((MAX_OFFLINE - ELAPSED))
+        
+        if [ "$REMAINING" -le 0 ]; then
+            echo "🛑 الستريمر طافي منذ 10 دقائق. إيقاف البث نهائياً."
+            if [ -n "$STANDBY_PID" ]; then kill "$STANDBY_PID" 2>/dev/null; fi
+            exit 0
+        fi
+        
+        # إذا لم تكن شاشة الانتظار شغالة، نشغلها
+        if [ -z "$STANDBY_PID" ] || ! kill -0 "$STANDBY_PID" 2>/dev/null; then
+            stream_standby "$REMAINING"
+        fi
+        
+        sleep 5
     fi
-
-    sleep 2
 done
-
-if [ -n "$TRIGGER_PID" ]; then
-    wait "$TRIGGER_PID" 2>/dev/null || true
-fi
-
-if [ "$TRIGGER_ATTEMPTED" -eq 0 ]; then
-    trigger_next || echo "[$(date)] فشل إطلاق الرن الأخير! النظام سيعتمد على الكرون."
-fi
-
-cleanup
